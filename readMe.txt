@@ -1,1 +1,1 @@
-Final version of a custom Stardist model we created during July.
+Frontend GUI for Devision Project
