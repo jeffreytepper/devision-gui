@@ -1,86 +1,181 @@
-from nicegui import ui
+import tkinter as tk
 from tkinter import filedialog
+from PIL import Image, ImageTk
+
 import os
 
-from training import main
+from tifffile import imread
 
-ui.label('Hello NiceGUI!')
+from csbdeep.utils import normalize
+from csbdeep.io import save_tiff_imagej_compatible
 
-class Params:
-    def __init__(self):
-        self.total_data = 180
-        self.dataset_size = 1
-        self.rays = 32
-        self.train_split = .85
-        self.testing_size = 1
-        self.epochs = 10 
-        self.model_name = "customModel"
-        self.head_filepath = ''
-        self.image_filepath = ''
-        self.mask_filepath = ''
-        self.output_filepath = ''
+from stardist.models import StarDist2D
 
-    def set_filepath(self):
+class Slideshow():
 
-        filepath = filedialog.askdirectory(
-            initialdir='/home',
-            title = 'select a directory',
-        )
+    def __init__(self, app, root):
 
-        self.head_filepath = filepath
-        self.image_filepath = 'image path not found'
-        self.mask_filepath = 'mask path not found'
-        self.output_filepath = filepath
+        self.app = app
 
-        for dir, subdirs, files in os.walk(filepath):
-            if 'images' in subdirs:
-                self.image_filepath = os.path.join(dir, 'images')
-            if 'masks' in subdirs:
-                self.mask_filepath = os.path.join(dir, 'masks')
+        self.current_index = -1
+        self.images = []
 
-        self.dataset_size = self.get_dataset_size()
+        self.title_label = tk.Label(root)
+        self.title_label.grid(row=1, column=0, columnspan=2)
 
-    def get_dataset_size(self):
-        size = len(os.listdir(self.image_filepath))
-        if size == len(os.listdir(self.mask_filepath)):
-            return size
+        left_img_frame = tk.Frame(root)
+        left_img_frame.grid(row=2, column=0, padx=10, pady=5)
+        self.test_image_label = tk.Label(left_img_frame)
+        self.test_image_label.pack()
+
+        right_img_frame = tk.Frame(root)
+        right_img_frame.grid(row=2, column=1, padx=10, pady=5)
+        self.prediction_image_label = tk.Label(right_img_frame)
+        self.prediction_image_label.pack()
+
+        self.numitems_label = tk.Label(root)
+        self.numitems_label.grid(row=3, column=0, columnspan=2)
+
+        button_frame = tk.Frame(root, pady=10)
+        button_frame.grid(row=4, column=0, columnspan=2)
+
+        next_button = tk.Button(button_frame, text="Next", command=self.next_image)
+        prev_button = tk.Button(button_frame, text="Prev", command=self.prev_image)
+        next_button.pack(side='right')
+        prev_button.pack(side='left')
+
+    def append_image(self, imagepath):
+        image = Image.open(imagepath)
+        tk_image = ImageTk.PhotoImage(image)
+        self.images.append([tk_image,None,-1])
+
+        self.next_image()
+
+    def add_prediction(self, imagepath):
+        image = Image.open(imagepath)
+        tk_image = ImageTk.PhotoImage(image)
+        self.images[self.current_index][1] = tk_image
+
+        self.prediction_image_label.config(image=tk_image)
+
+    def to_index(self, index):
+        self.current_index = index % len(self.images)
+
+        self.title_label.config(text=os.path.basename(self.app.images[self.current_index]))
+        test_image = self.images[self.current_index][0]
+        prediction_image = self.images[self.current_index][1]
+        num_items = self.images[self.current_index][2]
+
+        self.test_image_label.config(image=test_image)
+
+        if prediction_image:
+            self.prediction_image_label.config(image=prediction_image)
+            self.numitems_label.config(text='Number of Items:' + str(num_items))
         else:
-            print("Error: files must contains the same number of elements")
+            self.prediction_image_label.config(image='')
+            self.numitems_label.config(text='')
+
+    def next_image(self):
+        self.to_index(self.current_index + 1)
+
+    def prev_image(self):
+        self.to_index(self.current_index - 1)
 
 
 
+class App():
 
-params = Params()
+    def __init__(self):
+        self.root = tk.Tk()
+        self.images = []
+        self.model = StarDist2D.from_pretrained('2D_demo')
+        self.output_dir = os.getcwd()
+
+        header_frame = tk.Frame(self.root, pady=10)
+        header_frame.grid(row=0, column=0, columnspan=2)
+
+        open_image_button = tk.Button(header_frame, text="Select Images", command=self.select_images)
+        set_model_button = tk.Button(header_frame, text="Select Model", command=self.set_model)
+        set_output_dir = tk.Button(header_frame, text="Select Output Location", command=self.select_output_dir)
+        open_image_button.pack(side='left')
+        set_model_button.pack(side='right')
+        set_output_dir.pack(side='right')
+
+        self.slideshow = Slideshow(self, self.root)
+        
+        bottom_frame = tk.Frame(self.root, pady=10)
+        bottom_frame.grid(row=5, column=0, columnspan=2)
+
+        predict_button = tk.Button(bottom_frame, text="Predict", command=self.predict)
+        predict_all_button = tk.Button(bottom_frame, text="Predict All", command=self.predict_all)
+        predict_button.pack()
+        predict_all_button.pack()
+
+    def add_image(self, imagepath):
+        self.images.append(imagepath)
+        self.slideshow.append_image(imagepath)
+    
+    def set_model(self):
+        dirpath = filedialog.askdirectory(initialdir='.')
+        self.model = StarDist2D(None, name='stardist', basedir=dirpath)
+            
+    def select_images(self):
+        filepaths = filedialog.askopenfilenames(initialdir='.')
+        for path in filepaths:
+            self.add_image(path)
+
+    def select_output_dir(self):
+        self.output_dir = filedialog.askdirectory(initialdir='.')
 
 
-#Add filepath
-ui.button('Select filepath', on_click=params.set_filepath)
-ui.label().bind_text_from(params, 'head_filepath')
-ui.label().bind_text_from(params, 'image_filepath')
-ui.label().bind_text_from(params, 'mask_filepath')
+    def predict_all(self):
+        self.slideshow.to_index(0)
+        output_file = open(os.path.join(self.output_dir, 'num_items.csv'), 'w')
 
-#Dataset Size: Sets the size of the dataset to be used. Cannot be equal to total_data as there would be no testing data and the program will not work. Default: .75 of the total_data.
-dataset_size_slider = ui.slider(min=0, max=params.total_data - 1, value=params.total_data // 1.333).bind_value(params, 'dataset_size')
-ui.label().bind_text_from(dataset_size_slider, 'value')
-#Rays: Sets the number of Rays. Default: 32.
-rays_slider = ui.slider(min=4, max=128, value=32).bind_value(params, 'rays')
-ui.label().bind_text_from(rays_slider, 'value')
-#Train Split: Sets the percent to split training/validation data. Default: .85.
-train_split_slider = ui.slider(min=0.01, max=1.00, value=0.85, step=0.01).bind_value(params, 'train_split')
-ui.label().bind_text_from(train_split_slider, 'value')
-#Testing Size: Sets the number of testing images. Default: 1 to ensure the program works.
-testing_size_slider = ui.slider(min=1, max=params.total_data - 1, value=1).bind_value(params, 'testing_size')
-ui.label().bind_text_from(testing_size_slider, 'value')
-#Epochs: Sets the number of epochs. Accepts a number or list of numbers. E.g. --epochs 10 50 100 300. Default: 10.
-epochs_slider = ui.slider(min=1, max=100, value=10).bind_value(params, 'epochs')
-ui.label().bind_text_from(epochs_slider, 'value')
-#Model Name: Sets the name of the model. Accepts a string. Default: customModel
-ui.input(label='Model Name', placeholder='customModel').bind_value(params, 'model_name')
+        for imagepath in self.images:
+            labels, details = self.predict()
+
+            num_items = len(details['points'])
+            title = os.path.basename(self.images[self.slideshow.current_index])
+            output_file.write(title+','+str(num_items)+'\n')
+
+            self.slideshow.next_image()
+
+        output_file.close()
+            
+            
+
+    def predict(self):
+        imagepath = self.images[self.slideshow.current_index]
+        img = imread(imagepath)
+        img = normalize(img, 1, 99.8, axis=(0,1))
+        labels, details = self.model.predict_instances(img)
+
+        save_filedir = os.path.join(self.output_dir, 'labels')
+
+        if not os.path.exists(save_filedir):
+            os.makedirs(save_filedir)
+
+        save_filepath = os.path.join(save_filedir, os.path.basename(imagepath))
+
+        save_tiff_imagej_compatible(save_filepath, labels, axes='YX')
+        self.slideshow.add_prediction(save_filepath)
+
+        num_items = len(details['points'])
+        self.slideshow.images[self.slideshow.current_index][2] = num_items
+        self.slideshow.numitems_label.config(text='Number of Items:' + str(num_items))
+
+        return labels, details
 
 
+app = App()
+root = app.root
 
+path = '/home/max/development/stardist/data/dsb2018/test/images/1c2f9e121fc207efff79d46390df1a740566b683ff56a96d8cabe830a398dd2e.tif'
 
+tiff_image = Image.open(path)
+tk_image = ImageTk.PhotoImage(tiff_image)
 
-ui.button('train model', on_click=lambda: main(params))
+root.title("Devision Predictor")
 
-ui.run()
+root.mainloop()
